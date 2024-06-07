@@ -1,0 +1,147 @@
+﻿version: '3.1'
+services:
+  db_coordinate:
+    image: citusdata/citus:12.1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mypass
+    ports:
+      - "5432:5432"
+    volumes:
+      - "./postgres_config/pg_hba.conf:/usr/share/postgresql/16/pg_hba.conf"
+#      - "./postgres_config/postgresql.conf:/usr/share/postgresql/postgresql.conf"
+    healthcheck:
+      test: [ "CMD-SHELL", "sh -c 'pg_isready -U $$POSTGRES_USER'" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=all"
+      - "-c"
+      - "wal_level=logical"
+      
+  db_worker1:
+    image: citusdata/citus:12.1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mypass
+    ports:
+      - "5433:5432"
+    volumes:
+      - "./postgres_config/pg_hba.conf:/usr/share/postgresql/16/pg_hba.conf"
+#      - "./postgres_config/postgresql.conf:/usr/share/postgresql/postgresql.conf"
+    healthcheck:
+      test: [ "CMD-SHELL", "sh -c 'pg_isready -U $$POSTGRES_USER'" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=all"
+  
+  db_worker2:
+    image: citusdata/citus:12.1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mypass
+    ports:
+      - "5434:5432"
+    volumes:
+      - "./postgres_config/pg_hba.conf:/usr/share/postgresql/16/pg_hba.conf"
+#      - "./postgres_config/postgresql.conf:/usr/share/postgresql/postgresql.conf"
+    healthcheck:
+      test: [ "CMD-SHELL", "sh -c 'pg_isready -U $$POSTGRES_USER'" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=all"
+    
+  migrator-coordinate:
+    build:
+      context: .
+      dockerfile: src/MultiTenant.DbMigrator/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db_coordinate;Port=5432;Database=multitenantapp;Username=postgres;Password=mypass"
+    depends_on:
+      db_coordinate:
+        condition: service_healthy
+      migrator-worker1:
+        condition: service_completed_successfully
+      migrator-worker2:
+        condition: service_completed_successfully
+
+  migrator-worker1:
+    build:
+      context: .
+      dockerfile: src/MultiTenant.DbMigrator/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db_worker1;Port=5432;Database=multitenantapp;Username=postgres;Password=mypass"
+    depends_on:
+      db_worker1:
+        condition: service_healthy
+    links:
+      - db_worker1
+
+  migrator-worker2:
+    build:
+      context: .
+      dockerfile: src/MultiTenant.DbMigrator/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db_worker2;Port=5432;Database=multitenantapp;Username=postgres;Password=mypass"
+    depends_on:
+      db_worker2:
+        condition: service_healthy
+    links:
+      - db_worker2
+        
+  db_coordinate_setup:
+    build:
+      context: .
+      dockerfile: src/MultiTenant.CoordinateSetup/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db_coordinate;Port=5432;Database=multitenantapp;Username=postgres;Password=mypass"
+      IS_COORDINATOR: "true"
+      COORDINATOR: "db_coordinate"
+      WORKERS: "db_worker1,db_worker2"
+    links:
+      - db_coordinate
+      - db_worker1
+      - db_worker2
+    depends_on:
+      db_coordinate:
+        condition: service_healthy
+      migrator-coordinate:
+        condition: service_completed_successfully
+      migrator-worker1:
+        condition: service_completed_successfully
+      migrator-worker2:
+        condition: service_completed_successfully
+  
+  api:
+    build:
+      context: .
+      dockerfile: src/MultiTenant.HttpApi/Dockerfile
+    environment:
+     ConnectionStrings__DefaultConnection: "Host=db_coordinate;Port=5432;Database=multitenantapp;Username=postgres;Password=mypass"
+    ports:
+      - "11111:8080"
+    depends_on:
+      migrator-coordinate:
+        condition: service_completed_successfully
+      db_coordinate:
+        condition: service_healthy
+#      db_coordinate_setup:
+#        condition: service_completed_successfully
+    links:
+      - db_coordinate
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/weatherforecast"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
