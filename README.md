@@ -105,36 +105,14 @@ Now we can see the data is rebalanced and distributed to all nodes.
 ![Database Node Setup flow](./docs/imgs/db_setup_flows.png)
 
 # Troubleshoot Issues
-1. Data is not sharded properly. If check carefully, you only able to see the data only in coordinate.
-Example if you run this SQL in the `coordinator` container
-```sql
-select nodename,nodeport, table_name, pg_size_pretty(sum(shard_size))
-from citus_shards
-group by nodename,nodeport, table_name;
-```
-You will see the data is only in the coordinator node like this:
-```
-db_coordinate,5432,tenants,592 kB
-db_coordinate,5432,users,576 kB
-```
 
-If u try rebalance manual, using this command:
-```sql
-SELECT rebalance_table_shards()
-```
-You can see some error like this:
-```text
-ERROR:  logical decoding requires wal_level >= logical
-```
-This because something wrong in `pg_hba.conf` and need to be fixed.
-
-2. Error log like:
+1. Error log like:
 ```text
  connection to the remote node postgres@db_worker2:5432 failed with the following error: fe_sendauth: no password supplied
 ```
 Still same problem with above, need to fix `pg_hba.conf`.
 
-3. rebalance status is not work properly, you can see the error in the `details` column.
+2. rebalance status is not work properly, you can see the error in the `details` column.
 ```text
 ERROR:  logical decoding requires wal_level >= logical
 ```
@@ -154,4 +132,77 @@ or edit docker-compose.yml and add this line in `db_coordinate` service:
         - "postgres"
         - "-c"
         - "wal_level=logical"
+```
+
+# Useful Commands
+
+```sql
+-- View all active worker nodes
+SELECT * from citus_get_active_worker_nodes();
+
+-- Get only node name of active worker nodes
+SELECT "node_name" FROM citus_get_active_worker_nodes();
+
+-- Check is coordinator node or not
+SELECT * FROM citus_is_coordinator();
+
+-- set this node as coordinator
+SELECT citus_set_coordinator_host('db_coordinator', 5432);
+
+-- add new worker node as primary
+SELECT * from citus_add_node('db_worker1', 5432, -1,'primary');
+
+-- add new worker node as secondary
+SELECT * from citus_add_node('db_worker2', 5432, -1, 'secondary');
+
+-- get list of connection statuses between nodes
+SELECT * FROM citus_check_cluster_node_health();
+
+-- start rebalance asynchronously
+SELECT citus_rebalance_start();
+
+-- start rebalance synchronously
+SELECT * from rebalance_table_shards();
+
+-- get rebalance status
+SELECT * FROM citus_rebalance_status();
+
+-- get connection count to each node
+SELECT * from citus_remote_connection_stats();
+
+-- get shard table name of each shard table
+SELECT * FROM citus_shards;
+
+--- get shard configurations
+SELECT * from pg_dist_shard;
+SELECT * from pg_dist_placement;
+SELECT * from pg_dist_node;
+
+-- get rebalance strategy
+SELECT * FROM pg_dist_rebalance_strategy;
+
+-- change rebalance strategy
+SELECT get_shard_id_for_distribution_column('tenants', 4)
+
+-- find which node will contain the data for table `tenants` which id = 1
+SELECT shardid, shardstate, shardlength, nodename, nodeport, placementid
+FROM pg_dist_placement AS placement,
+     pg_dist_node AS node
+WHERE placement.groupid = node.groupid
+  AND node.noderole = 'primary'
+  AND shardid = (
+    SELECT get_shard_id_for_distribution_column('tenants', 1)
+);
+
+
+-- get the size of each shard in each node
+select nodename,nodeport, table_name, pg_size_pretty(sum(shard_size))
+from citus_shards
+group by nodename,nodeport, table_name;
+
+-- get current wal_level
+SHOW wal_level;
+     
+-- set wal_level to logical
+ALTER SYSTEM SET wal_level = logical;
 ```
